@@ -1,0 +1,15 @@
+.git/
+.gitignore
+.chezmoiignore
+README.md
+docs/
+LICENSE
+profile-id
+profile-id.example
+secrets.example
+install.sh
+init-age-key.sh
+save.sh
+apply.sh
+scripts/
+template-paths

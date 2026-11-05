@@ -1,0 +1,3 @@
+# Never track local decrypted secrets or age identities.
+/private_dot_secrets/**/*.sh
+*.agekey
