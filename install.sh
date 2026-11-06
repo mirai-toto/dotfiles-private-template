@@ -5,12 +5,16 @@ set -euo pipefail
 SCRIPT_DIR=$(dirname "$(realpath "$0")")
 umask 077
 
-if [ -e "$HOME/.secrets" ] && [ ! -d "$HOME/.secrets" ]; then
-  echo "~/.secrets is a file; move its contents safely before installing a profile." >&2
-  exit 1
-fi
+check_secrets_directory() {
+  if [ -e "$HOME/.secrets" ] && [ ! -d "$HOME/.secrets" ]; then
+    echo "~/.secrets is a file; move its contents safely before installing a profile." >&2
+    exit 1
+  fi
+}
 
-if [ ! -f "$SCRIPT_DIR/profile-id" ]; then
+choose_profile_id() {
+  [ ! -f "$SCRIPT_DIR/profile-id" ] || return 0
+  local candidate
   while true; do
     if ! read -r -p "Profile ID (lowercase letters, digits, hyphens): " candidate; then
       echo "No profile ID provided." >&2
@@ -35,18 +39,18 @@ if [ ! -f "$SCRIPT_DIR/profile-id" ]; then
     echo "Created profile-id ($candidate). Track it in your private repository."
     break
   done
-fi
+}
 
-source "$SCRIPT_DIR/scripts/profile.sh"
-if [ -L "$HOME/.secrets/$PROFILE_ID" ]; then
-  echo "Profile secrets directory cannot be a symlink: $HOME/.secrets/$PROFILE_ID" >&2
-  exit 1
-fi
-mkdir -p -m 700 "$HOME/.secrets/$PROFILE_ID"
+ensure_profile_secrets() {
+  if [ -L "$HOME/.secrets/$PROFILE_ID" ]; then
+    echo "Profile secrets directory cannot be a symlink: $HOME/.secrets/$PROFILE_ID" >&2
+    exit 1
+  fi
+  mkdir -p -m 700 "$HOME/.secrets/$PROFILE_ID"
+}
 
-mkdir -p "$(dirname "$AGE_IDENTITY")" "$(dirname "$CHEZMOI_CONFIG")"
-restore="$SCRIPT_DIR/scripts/restore-age-key.sh"
-if [ -f "$restore" ]; then
+retrieve_age_identity() {
+  local restore="$1"
   key=$(mktemp "${AGE_IDENTITY}.tmp.XXXXXX")
   trap 'rm -f "$key"' EXIT
   if ! bash "$restore" > "$key"; then
@@ -65,24 +69,46 @@ if [ -f "$restore" ]; then
   else
     mv "$key" "$AGE_IDENTITY"
   fi
-elif [ ! -f "$AGE_IDENTITY" ]; then
-  echo "Missing age identity: $AGE_IDENTITY. Restore it securely or provide $restore; use ./init-age-key.sh only for a new profile." >&2
-  exit 1
-fi
-if ! grep -q '^AGE-SECRET-KEY-' "$AGE_IDENTITY"; then
-  echo "Local age identity is invalid: $AGE_IDENTITY" >&2
-  exit 1
-fi
-chmod 600 "$AGE_IDENTITY"
+}
 
-recipient=$(chezmoi age-keygen -y "$AGE_IDENTITY")
-cat > "$CHEZMOI_CONFIG" <<EOF
+restore_age_identity() {
+  local restore="$SCRIPT_DIR/scripts/restore-age-key.sh"
+  mkdir -p "$(dirname "$AGE_IDENTITY")" "$(dirname "$CHEZMOI_CONFIG")"
+  if [ -f "$restore" ]; then
+    retrieve_age_identity "$restore"
+  elif [ ! -f "$AGE_IDENTITY" ]; then
+    echo "Missing age identity: $AGE_IDENTITY. Restore it securely or provide $restore; use ./init-age-key.sh only for a new profile." >&2
+    exit 1
+  fi
+  if ! grep -q '^AGE-SECRET-KEY-' "$AGE_IDENTITY"; then
+    echo "Local age identity is invalid: $AGE_IDENTITY" >&2
+    exit 1
+  fi
+  chmod 600 "$AGE_IDENTITY"
+}
+
+configure_chezmoi() {
+  local recipient
+  recipient=$(chezmoi age-keygen -y "$AGE_IDENTITY")
+  cat > "$CHEZMOI_CONFIG" <<EOF
 encryption = "age"
 
 [age]
 identity = "$AGE_IDENTITY"
 recipient = "$recipient"
 EOF
-chmod 600 "$CHEZMOI_CONFIG"
-bash "$SCRIPT_DIR/scripts/register-profile.sh" "$SCRIPT_DIR"
-bash "$SCRIPT_DIR/apply.sh"
+  chmod 600 "$CHEZMOI_CONFIG"
+}
+
+main() {
+  check_secrets_directory
+  choose_profile_id
+  source "$SCRIPT_DIR/scripts/profile.sh"
+  ensure_profile_secrets
+  restore_age_identity
+  configure_chezmoi
+  bash "$SCRIPT_DIR/scripts/register-profile.sh" "$SCRIPT_DIR"
+  bash "$SCRIPT_DIR/apply.sh"
+}
+
+main "$@"
